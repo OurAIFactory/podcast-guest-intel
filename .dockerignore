@@ -1,0 +1,9 @@
+.git
+node_modules
+data
+*.log
+.env
+.env.*
+!.env.example
+npm-debug.log*
+Thumbs.db

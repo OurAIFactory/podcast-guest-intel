@@ -1,0 +1,7 @@
+# LOCAL dev only: hot reload. Never used to build the production image.
+services:
+  web:
+    command: ["node","--experimental-sqlite","--watch","src/server.js"]
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public

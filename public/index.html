@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Podcast Guest Directory</title>
+<style>
+body{font:15px/1.4 system-ui,Segoe UI,Arial;margin:0;background:#0d1117;color:#e6edf3}
+header{padding:16px 20px;border-bottom:1px solid #21262d;display:flex;gap:12px;align-items:center;position:sticky;top:0;background:#0d1117}
+input{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:8px 10px;border-radius:8px;flex:1;max-width:360px}
+#stat{color:#8b949e;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;padding:20px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:10px;overflow:hidden}
+.card img{width:100%;aspect-ratio:1;object-fit:cover;background:#21262d;display:block}
+.card .n{padding:8px 10px;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .r{padding:0 10px 10px;font-size:11px;color:#8b949e}
+</style></head><body>
+<header><strong>Podcast Guest Directory</strong><input id="q" placeholder="Search guests…"><span id="stat"></span></header>
+<div class="grid" id="grid"></div>
+<script>
+let offset=0,q="",loading=false,done=false;
+const grid=document.getElementById("grid"),stat=document.getElementById("stat");
+async function load(reset){
+  if(loading)return; loading=true;
+  if(reset){offset=0;done=false;grid.innerHTML="";}
+  const r=await fetch(`/api/guests?limit=60&offset=${offset}&q=${encodeURIComponent(q)}`);
+  const d=await r.json(); stat.textContent=d.total.toLocaleString()+" guests with photos";
+  for(const g of d.rows){
+    const c=document.createElement("div");c.className="card";
+    c.innerHTML=`<img loading="lazy" src="/${g.image_file}" onerror="this.style.visibility='hidden'"><div class="n">${g.name||"(unknown)"}</div><div class="r">${g.role||""}</div>`;
+    grid.appendChild(c);
+  }
+  offset+=d.rows.length; if(!d.rows.length)done=true; loading=false;
+}
+document.getElementById("q").addEventListener("input",e=>{q=e.target.value;clearTimeout(window._t);window._t=setTimeout(()=>load(true),250)});
+addEventListener("scroll",()=>{if(!done&&innerHeight+scrollY>document.body.offsetHeight-600)load(false)});
+load(true);
+</script></body></html>

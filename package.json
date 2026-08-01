@@ -1,0 +1,12 @@
+{
+  "name": "podcast-guest-intel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node --experimental-sqlite src/server.js",
+    "dev": "node --experimental-sqlite --watch src/server.js"
+  },
+  "dependencies": { "express": "^4.21.2" }
+}
