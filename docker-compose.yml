@@ -7,7 +7,17 @@ services:
       - PORT=8080
       - APP_DATA_DIR=/app/data
     volumes:
-      - webdata:/app/data
+      - appdata:/app/data
+    restart: unless-stopped
+  collector:
+    build: .
+    command: ["node","--experimental-sqlite","src/collector.js"]
+    environment:
+      - DEPLOY_MODE=local
+      - APP_DATA_DIR=/app/data
+      - COLLECTOR_CONCURRENCY=24
+    volumes:
+      - appdata:/app/data
     restart: unless-stopped
 volumes:
-  webdata:
+  appdata:

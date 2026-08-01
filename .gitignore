@@ -1,3 +1,4 @@
+_init*.bat
 node_modules
 data
 .env
