@@ -19,6 +19,18 @@ const packs = packwriter.init();
 const seeded = feeds.seedFromFile(db);
 if (seeded) console.log(JSON.stringify({ msg: "seeded", added: seeded }));
 
+// Minimal health/stats server: satisfies the container HEALTHCHECK and exposes live progress.
+require("node:http").createServer((req, res) => {
+  if (req.url === "/healthz") { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"ok":true}'); }
+  if (req.url === "/stats") {
+    try {
+      const s = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(status='done'),0) done, COALESCE(SUM(status IN('pending','retry')),0) pending, COALESCE(SUM(status='failed'),0) failed FROM feeds").get();
+      res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(s));
+    } catch (e) { res.writeHead(500); return res.end(String(e.message)); }
+  }
+  res.writeHead(404); res.end();
+}).listen(cfg.PORT, "0.0.0.0", () => console.log(JSON.stringify({ msg: "collector health/stats listening", port: cfg.PORT })));
+
 const pick = db.prepare("SELECT url FROM feeds WHERE status IN('pending','retry') AND next_at<=? ORDER BY next_at LIMIT ?");
 const mark = db.prepare("UPDATE feeds SET status=?,attempts=attempts+1,http_status=?,last_error=?,sha=?,checked_at=?,next_at=? WHERE url=?");
 
