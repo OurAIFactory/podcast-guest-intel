@@ -12,6 +12,7 @@ for (const d of [cfg.DATA_DIR, cfg.IMAGES_DIR]) fs.mkdirSync(d, { recursive: tru
 
 const app = express();
 app.disable("x-powered-by");
+require("./admin").mountAdmin(app);
 
 // Liveness: fast, no dependencies.
 app.get("/healthz", (_req, res) => res.json({ ok: true }));

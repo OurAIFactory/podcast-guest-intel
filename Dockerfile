@@ -6,7 +6,7 @@ COPY . .
 
 FROM node:22-slim AS runtime
 ENV NODE_ENV=production DEPLOY_MODE=server PORT=8080
-RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends tini tar gzip && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app /app
 # node:22-slim already ships a non-root "node" user at UID 1000 — reuse it (avoids UID collision)
