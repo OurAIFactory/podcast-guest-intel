@@ -19,14 +19,27 @@ app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/healthz/durability", (_req, res) =>
   res.json({ data_dir: cfg.DATA_DIR, data_dir_is_mount: isMount(cfg.DATA_DIR), ok: true }));
 
-function openDb() { try { return new DatabaseSync(cfg.GUESTS_DB, { readOnly: true }); } catch { return null; } }
+// Cached read-only guests DB: one connection reused across requests,
+// invalidated when the file changes (e.g. re-uploaded).
+const cache = { db: null, mtime: -1 };
+function openDb() {
+  let st;
+  try { st = fs.statSync(cfg.GUESTS_DB); } catch { return null; }
+  if (!cache.db || st.mtimeMs !== cache.mtime) {
+    if (cache.db) { try { cache.db.close(); } catch {} cache.db = null; }
+    try { cache.db = new DatabaseSync(cfg.GUESTS_DB, { readOnly: true }); cache.mtime = st.mtimeMs; }
+    catch { cache.db = null; }
+  }
+  return cache.db;
+}
+function dropDb() { if (cache.db) { try { cache.db.close(); } catch {} } cache.db = null; cache.mtime = -1; }
 
 // Readiness: checks the data store.
 app.get("/readyz", (_req, res) => {
   const d = openDb();
   if (!d) return res.status(503).json({ ready: false, reason: "guests db not present yet" });
-  try { d.prepare("SELECT 1").get(); d.close(); res.json({ ready: true }); }
-  catch (e) { res.status(503).json({ ready: false, reason: String(e.message) }); }
+  try { d.prepare("SELECT 1").get(); res.json({ ready: true }); }
+  catch (e) { dropDb(); res.status(503).json({ ready: false, reason: String(e.message) }); }
 });
 
 app.get("/api/guests", (req, res) => {
@@ -42,9 +55,8 @@ app.get("/api/guests", (req, res) => {
     const rows = d.prepare(
       `SELECT person_id,name,role,website,image_file,width,height FROM guest_images WHERE ${where} ORDER BY min_side DESC LIMIT ? OFFSET ?`
     ).all(...args, limit, offset);
-    d.close();
     res.json({ total, rows });
-  } catch (e) { try { d.close(); } catch {} res.status(500).json({ error: String(e.message) }); }
+  } catch (e) { dropDb(); res.status(500).json({ error: String(e.message) }); }
 });
 
 app.get("/feed/:sha", async (req, res) => {
@@ -52,8 +64,8 @@ app.get("/feed/:sha", async (req, res) => {
   catch { res.status(500).end(); }
 });
 
-app.use("/images", express.static(cfg.IMAGES_DIR, { maxAge: "7d", fallthrough: true }));
-app.use("/", express.static(path.join(__dirname, "..", "public")));
+app.use("/images", express.static(cfg.IMAGES_DIR, { maxAge: "7d", fallthrough: true, immutable: true }));
+app.use("/", express.static(path.join(__dirname, "..", "public"), { maxAge: "1h" }));
 
 const server = app.listen(cfg.PORT, "0.0.0.0", () =>
   console.log(JSON.stringify({ msg: "listening", port: cfg.PORT, data_dir: cfg.DATA_DIR })));

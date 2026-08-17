@@ -13,6 +13,10 @@ function open() {
       attempts INTEGER NOT NULL DEFAULT 0, http_status INTEGER, last_error TEXT, sha TEXT,
       checked_at TEXT, next_at INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS idx_feeds_due ON feeds(status,next_at);`);
+  // Conditional-GET validators (added later; guarded for pre-existing DBs).
+  for (const col of ["etag TEXT", "last_modified TEXT"]) {
+    try { db.exec(`ALTER TABLE feeds ADD COLUMN ${col}`); } catch {}
+  }
   return db;
 }
 
