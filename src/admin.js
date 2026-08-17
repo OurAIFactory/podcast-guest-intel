@@ -57,6 +57,32 @@ function mountAdmin(app) {
     child.stdin.on("error", () => {});
   });
 
+  // Current size of a file on the volume (for resumable large-file upload).
+  router.get("/size", (req, res) => {
+    const rel = String(req.query.path || "").replace(/^\/+/, "");
+    const p = path.join(cfg.DATA_DIR, rel);
+    if (!p.startsWith(cfg.DATA_DIR)) return res.status(400).end();
+    fs.stat(p, (err, st) => res.json({ path: rel, size: err ? 0 : st.size }));
+  });
+
+  // Byte-level resumable upload: append (default) or truncate+write a raw chunk.
+  // Client checks /size, seeks the local file to that offset, and streams the rest
+  // in chunks. Constant memory; survives interruptions.
+  router.post("/put", (req, res) => {
+    const rel = String(req.query.path || "").replace(/^\/+/, "");
+    const p = path.join(cfg.DATA_DIR, rel);
+    if (!p.startsWith(cfg.DATA_DIR) || rel.includes("..")) return res.status(400).end();
+    try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
+    const flags = req.query.mode === "truncate" ? "w" : "a";
+    const ws = fs.createWriteStream(p, { flags });
+    let bytes = 0;
+    req.on("data", (d) => { bytes += d.length; });
+    ws.on("error", (e) => { try { res.status(500).json({ ok: false, error: String(e.message) }); } catch {} });
+    ws.on("finish", () => { let size = 0; try { size = fs.statSync(p).size; } catch {} res.json({ ok: true, path: rel, wrote: bytes, size }); });
+    req.on("error", () => { try { ws.destroy(); } catch {} });
+    req.pipe(ws);
+  });
+
   app.use("/admin", router);
   console.log(JSON.stringify({ msg: "admin endpoints mounted (import enabled)" }));
 }
