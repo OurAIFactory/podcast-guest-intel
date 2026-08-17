@@ -16,9 +16,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const db = feeds.open();
 const packs = packwriter.init();
-const seeded = feeds.seedFromFile(db);
-if (seeded) console.log(JSON.stringify({ msg: "seeded", added: seeded }));
-
 // Minimal health/stats server: satisfies the container HEALTHCHECK and exposes live progress.
 require("node:http").createServer((req, res) => {
   if (req.url === "/healthz") { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"ok":true}'); }
@@ -64,4 +61,8 @@ async function loop() {
   }
 }
 process.on("SIGTERM", () => { try { packs.close(); } catch {} process.exit(0); });
-loop().catch((e) => { console.error("[FATAL]", e.stack || e); process.exit(1); });
+(async () => {
+  const added = await feeds.seedFromFile(db);
+  console.log(JSON.stringify({ msg: "seed_done", added }));
+  loop().catch((e) => { console.error("[FATAL]", e.stack || e); process.exit(1); });
+})();

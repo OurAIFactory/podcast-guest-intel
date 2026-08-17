@@ -16,15 +16,21 @@ function open() {
   return db;
 }
 
-function seedFromFile(db) {
+// Streamed, chunk-committed seeding: safe for very large seed files (millions of
+// URLs) without buffering the whole file, and yields to the event loop so the
+// health server keeps responding during a large one-time seed.
+async function seedFromFile(db) {
   const f = path.join(cfg.DATA_DIR, "seed_feeds.txt");
   if (!fs.existsSync(f)) return 0;
+  const readline = require("node:readline");
   const ins = db.prepare("INSERT OR IGNORE INTO feeds(url) VALUES(?)");
-  let n = 0;
+  let n = 0, sinceYield = 0;
   db.exec("BEGIN");
-  for (const line of fs.readFileSync(f, "utf8").split(/\r?\n/)) {
+  const rl = readline.createInterface({ input: fs.createReadStream(f, { encoding: "utf8" }), crlfDelay: Infinity });
+  for await (const line of rl) {
     const u = line.trim();
-    if (/^https?:\/\//i.test(u)) { ins.run(u); n += 1; }
+    if (/^https?:\/\//i.test(u)) { ins.run(u); n += 1; sinceYield += 1; }
+    if (sinceYield >= 50000) { db.exec("COMMIT"); await new Promise((r) => setImmediate(r)); db.exec("BEGIN"); sinceYield = 0; }
   }
   db.exec("COMMIT");
   return n;
