@@ -46,7 +46,8 @@ function mountAdmin(app) {
   // Streamed bulk import: request body is a gzipped tar, piped straight into
   // `tar -xz -C DATA_DIR`. Constant memory regardless of archive size.
   router.post("/import-tgz", (req, res) => {
-    const child = spawn("tar", ["-xz", "--no-same-owner", "--no-same-permissions", "-C", cfg.DATA_DIR], { stdio: ["pipe", "ignore", "pipe"] });
+    // GNU tar -x auto-detects gzip/plain, so the client can stream either.
+    const child = spawn("tar", ["-x", "--no-same-owner", "--no-same-permissions", "-C", cfg.DATA_DIR], { stdio: ["pipe", "ignore", "pipe"] });
     let err = "";
     child.stderr.on("data", (d) => { err += d.toString(); if (err.length > 4000) err = err.slice(-4000); });
     child.on("error", (e) => { try { res.status(500).json({ ok: false, error: "spawn:" + e.message }); } catch {} });
