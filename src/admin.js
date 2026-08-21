@@ -7,6 +7,8 @@ const path = require("node:path");
 const express = require("express");
 const cfg = require("./config");
 
+let importMutex = false;
+
 function mountAdmin(app) {
   const TOKEN = process.env.IMPORT_TOKEN;
   if (!TOKEN) return; // feature-flagged off when no token present
@@ -29,6 +31,7 @@ function mountAdmin(app) {
   // Shallow directory listing with sizes — verify what landed after upload.
   router.get("/ls", (req, res) => {
     const rel = String(req.query.path || "").replace(/^\/+/, "");
+    if (rel.includes("..")) return res.status(400).end();
     const p = path.join(cfg.DATA_DIR, rel);
     if (!p.startsWith(cfg.DATA_DIR)) return res.status(400).end();
     fs.readdir(p, { withFileTypes: true }, (err, ents) => {
@@ -46,12 +49,18 @@ function mountAdmin(app) {
   // Streamed bulk import: request body is a gzipped tar, piped straight into
   // `tar -xz -C DATA_DIR`. Constant memory regardless of archive size.
   router.post("/import-tgz", (req, res) => {
+    if (importMutex) return res.status(429).json({ ok: false, busy: true });
+    importMutex = true;
+
     // GNU tar -x auto-detects gzip/plain, so the client can stream either.
     const child = spawn("tar", ["-x", "--no-same-owner", "--no-same-permissions", "-C", cfg.DATA_DIR], { stdio: ["pipe", "ignore", "pipe"] });
     let err = "";
     child.stderr.on("data", (d) => { err += d.toString(); if (err.length > 4000) err = err.slice(-4000); });
-    child.on("error", (e) => { try { res.status(500).json({ ok: false, error: "spawn:" + e.message }); } catch {} });
-    child.on("close", (code) => { if (code === 0) res.json({ ok: true }); else res.status(500).json({ ok: false, code, stderr: err.slice(-1200) }); });
+    child.on("error", (e) => { importMutex = false; try { res.status(500).json({ ok: false, error: "spawn:" + e.message }); } catch {} });
+    child.on("close", (code) => {
+      importMutex = false;
+      if (code === 0) res.json({ ok: true }); else res.status(500).json({ ok: false, code, stderr: err.slice(-1200) });
+    });
     req.on("error", () => { try { child.kill(); } catch {} });
     req.pipe(child.stdin);
     child.stdin.on("error", () => {});
@@ -60,6 +69,7 @@ function mountAdmin(app) {
   // Current size of a file on the volume (for resumable large-file upload).
   router.get("/size", (req, res) => {
     const rel = String(req.query.path || "").replace(/^\/+/, "");
+    if (rel.includes("..")) return res.status(400).end();
     const p = path.join(cfg.DATA_DIR, rel);
     if (!p.startsWith(cfg.DATA_DIR)) return res.status(400).end();
     fs.stat(p, (err, st) => res.json({ path: rel, size: err ? 0 : st.size }));
@@ -72,14 +82,22 @@ function mountAdmin(app) {
     const rel = String(req.query.path || "").replace(/^\/+/, "");
     const p = path.join(cfg.DATA_DIR, rel);
     if (!p.startsWith(cfg.DATA_DIR) || rel.includes("..")) return res.status(400).end();
+    if (importMutex) return res.status(429).json({ ok: false, busy: true });
+    importMutex = true;
+    let released = false;
+    const release = () => { if (!released) { released = true; importMutex = false; } };
     try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
     const flags = req.query.mode === "truncate" ? "w" : "a";
     const ws = fs.createWriteStream(p, { flags });
     let bytes = 0;
     req.on("data", (d) => { bytes += d.length; });
-    ws.on("error", (e) => { try { res.status(500).json({ ok: false, error: String(e.message) }); } catch {} });
-    ws.on("finish", () => { let size = 0; try { size = fs.statSync(p).size; } catch {} res.json({ ok: true, path: rel, wrote: bytes, size }); });
-    req.on("error", () => { try { ws.destroy(); } catch {} });
+    ws.on("error", (e) => { release(); try { res.status(500).json({ ok: false, error: String(e.message) }); } catch {} });
+    ws.on("finish", () => {
+      release();
+      let size = 0; try { size = fs.statSync(p).size; } catch {} res.json({ ok: true, path: rel, wrote: bytes, size });
+    });
+    req.on("error", () => { release(); try { ws.destroy(); } catch {} });
+    res.on("close", release);
     req.pipe(ws);
   });
 

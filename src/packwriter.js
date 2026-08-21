@@ -14,11 +14,12 @@ const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const cfg = require("./config");
 const CAP = Number(process.env.PACK_CAP_BYTES || 1073741824); // 1 GB per pack
+const GZIP_LEVEL = Number(process.env.PACK_GZIP_LEVEL || 6);
 
 function init() {
   fs.mkdirSync(cfg.PACKS_DIR, { recursive: true });
   const db = new DatabaseSync(cfg.XML_INDEX_DB);
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=60000;
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=60000; PRAGMA cache_size=-8000; PRAGMA temp_store=MEMORY;
     CREATE TABLE IF NOT EXISTS xml_index(sha TEXT PRIMARY KEY,pack INTEGER,offset INTEGER,length INTEGER,partial INTEGER,compression TEXT);
     CREATE TABLE IF NOT EXISTS pack_meta(pack INTEGER PRIMARY KEY,size INTEGER);`);
   const hasStmt = db.prepare("SELECT 1 FROM xml_index WHERE sha=?");
@@ -39,12 +40,17 @@ function init() {
   function store(_url, xmlBuf) {
     const sha = crypto.createHash("sha256").update(xmlBuf).digest("hex");
     if (hasStmt.get(sha)) return sha; // dedupe: identical content already archived
-    const gz = zlib.gzipSync(xmlBuf, { level: 6 });
+    const gz = zlib.gzipSync(xmlBuf, { level: GZIP_LEVEL });
     if (cur.size >= CAP) { metaStmt.run(cur.id, cur.size); cur = { id: cur.id + 1, size: 0 }; }
     const f = packFd(cur.id);
     const off = fs.fstatSync(f).size;
-    fs.writeSync(f, gz, 0, gz.length, off);
-    insStmt.run(sha, cur.id, off, gz.length, 0, "gzip");
+    try {
+      fs.writeSync(f, gz, 0, gz.length, off);
+      insStmt.run(sha, cur.id, off, gz.length, 0, "gzip");
+    } catch (err) {
+      if (err.code === "ENOSPC") throw new Error("disk_full");
+      throw err;
+    }
     cur.size = off + gz.length;
     metaStmt.run(cur.id, cur.size);
     return sha;

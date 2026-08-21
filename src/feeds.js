@@ -9,7 +9,9 @@ const cfg = require("./config");
 function open() {
   const db = new DatabaseSync(path.join(cfg.DATA_DIR, "feeds.db"));
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=60000;
-    CREATE TABLE IF NOT EXISTS feeds(url TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending',
+    PRAGMA cache_size=-16000; PRAGMA temp_store=MEMORY;`);
+  try { db.exec(`PRAGMA mmap_size=134217728;`); } catch {}
+  db.exec(`CREATE TABLE IF NOT EXISTS feeds(url TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending',
       attempts INTEGER NOT NULL DEFAULT 0, http_status INTEGER, last_error TEXT, sha TEXT,
       checked_at TEXT, next_at INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS idx_feeds_due ON feeds(status,next_at);`);

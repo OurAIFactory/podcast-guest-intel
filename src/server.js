@@ -12,6 +12,7 @@ for (const d of [cfg.DATA_DIR, cfg.IMAGES_DIR]) fs.mkdirSync(d, { recursive: tru
 
 const app = express();
 app.disable("x-powered-by");
+app.set("etag", false);
 require("./admin").mountAdmin(app);
 
 // Liveness: fast, no dependencies.
@@ -21,18 +22,28 @@ app.get("/healthz/durability", (_req, res) =>
 
 // Cached read-only guests DB: one connection reused across requests,
 // invalidated when the file changes (e.g. re-uploaded).
-const cache = { db: null, mtime: -1 };
+const cache = { db: null, mtime: -1, countStmt: null, rowsStmt: null };
 function openDb() {
   let st;
   try { st = fs.statSync(cfg.GUESTS_DB); } catch { return null; }
   if (!cache.db || st.mtimeMs !== cache.mtime) {
     if (cache.db) { try { cache.db.close(); } catch {} cache.db = null; }
-    try { cache.db = new DatabaseSync(cfg.GUESTS_DB, { readOnly: true }); cache.mtime = st.mtimeMs; }
+    try {
+      cache.db = new DatabaseSync(cfg.GUESTS_DB, { readOnly: true });
+      cache.db.exec("PRAGMA cache_size=-8000");
+      cache.db.exec("PRAGMA temp_store=MEMORY");
+      try { cache.db.exec("PRAGMA mmap_size=268435456"); } catch {}
+      cache.mtime = st.mtimeMs;
+      cache.countStmt = cache.db.prepare("SELECT COUNT(*) n FROM guest_images WHERE min_side>=120 AND name LIKE ?");
+      cache.rowsStmt = cache.db.prepare(
+        "SELECT person_id,name,role,website,image_file,width,height FROM guest_images WHERE min_side>=120 AND name LIKE ? ORDER BY min_side DESC LIMIT ? OFFSET ?"
+      );
+    }
     catch { cache.db = null; }
   }
   return cache.db;
 }
-function dropDb() { if (cache.db) { try { cache.db.close(); } catch {} } cache.db = null; cache.mtime = -1; }
+function dropDb() { if (cache.db) { try { cache.db.close(); } catch {} } cache.db = null; cache.mtime = -1; cache.countStmt = null; cache.rowsStmt = null; }
 
 // Readiness: checks the data store.
 app.get("/readyz", (_req, res) => {
@@ -42,6 +53,10 @@ app.get("/readyz", (_req, res) => {
   catch (e) { dropDb(); res.status(503).json({ ready: false, reason: String(e.message) }); }
 });
 
+const countCache = new Map();
+const MAX_CACHE_SIZE = 200;
+const CACHE_TTL = 30000; // 30 seconds
+
 app.get("/api/guests", (req, res) => {
   const d = openDb();
   if (!d) return res.json({ total: 0, rows: [] });
@@ -49,12 +64,20 @@ app.get("/api/guests", (req, res) => {
     const limit = Math.min(200, Number(req.query.limit) || 60);
     const offset = Math.max(0, Number(req.query.offset) || 0);
     const q = String(req.query.q || "").trim();
-    let where = "min_side>=120"; const args = [];
-    if (q) { where += " AND name LIKE ?"; args.push(`%${q}%`); }
-    const total = d.prepare(`SELECT COUNT(*) n FROM guest_images WHERE ${where}`).get(...args).n;
-    const rows = d.prepare(
-      `SELECT person_id,name,role,website,image_file,width,height FROM guest_images WHERE ${where} ORDER BY min_side DESC LIMIT ? OFFSET ?`
-    ).all(...args, limit, offset);
+    let total;
+    const cacheKey = q;
+    const cached = countCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      total = cached.total;
+    } else {
+      total = cache.countStmt.get(`%${q}%`).n;
+      countCache.set(cacheKey, { total, timestamp: Date.now() });
+      if (countCache.size > MAX_CACHE_SIZE) {
+        const oldestKey = countCache.keys().next().value;
+        countCache.delete(oldestKey);
+      }
+    }
+    const rows = cache.rowsStmt.all(`%${q}%`, limit, offset);
     res.json({ total, rows });
   } catch (e) { dropDb(); res.status(500).json({ error: String(e.message) }); }
 });
